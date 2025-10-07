@@ -29,6 +29,7 @@ class AdvancedSecurity {
   constructor(firewall) {
     this.logger = getLogger();
     this.firewall = firewall;
+    this.configs = require('../configs.json');
     
     // Behavioral tracking for bot detection and threat analysis
     this.userBehavior = new Map();    // IP -> comprehensive behavior data
@@ -120,16 +121,18 @@ class AdvancedSecurity {
 
     // OS Command Injection attack patterns
     // Detects shell metacharacters and command execution attempts
+    // NOTE: Must be context-aware - don't check headers, only URL and body
     this.commandInjectionPatterns = [
-      /[;|&`$(){}[\]<>]/g,
-      /\$\(.*\)/g,                       // Command substitution
-      /`.*`/g,                           // Backticks
-      /\|\s*\w+/g,                       // Pipe commands
-      /&&|\|\|/g,                        // Command chaining
-      /(nc|netcat|curl|wget|bash|sh|cmd|powershell|python|perl|ruby|php)\s/gi,
-      /\/bin\/(ba)?sh/gi,
-      /etc\/passwd/gi,
-      /\/dev\/(tcp|udp)/gi,
+      /;.*\w+/g,                         // Semicolon with command (;cat, ;ls)
+      /\|\s*\w+/g,                       // Pipe with command (|cat, |ls)
+      /&&\s*\w+/g,                       // AND chain with command (&&cat)
+      /\|\|\s*\w+/g,                     // OR chain with command (||cat)
+      /\$\(.*\)/g,                       // Command substitution $(cmd)
+      /`.*`/g,                           // Backtick command substitution
+      /(nc|netcat|curl|wget|bash|sh|cmd|powershell|python|perl|ruby|php)\s/gi, // Shell commands
+      /\/bin\/(ba)?sh/gi,                // Shell paths
+      /etc\/passwd/gi,                   // Sensitive files
+      /\/dev\/(tcp|udp)/gi,              // Network devices
     ];
 
     // Server-Side Template Injection (SSTI) attack patterns
@@ -210,10 +213,31 @@ class AdvancedSecurity {
    */
   async analyze(req) {
     const ip = this.getClientIP(req);
+    
+    // Skip analysis for whitelisted IPs
+    // Localhost and trusted IPs bypass all security checks
+    if (this.firewall && this.firewall.isIPWhitelisted(ip)) {
+      return { allowed: true, threats: [], threatScore: 0, whitelisted: true };
+    }
+    
     const url = req.url;
     const method = req.method;
     const headers = req.headers;
     const userAgent = headers['user-agent'] || '';
+
+    // Skip strict analysis for framework internal requests
+    // Modern frameworks (Next.js, Nuxt, etc.) make many internal requests
+    // that can contain special characters in paths (webpack chunks, HMR, etc.)
+    // These should not trigger injection detection
+    if (this.firewall && this.firewall.isFrameworkRequest(req)) {
+      return { allowed: true, threats: [], threatScore: 0, framework: true };
+    }
+
+    // Skip strict analysis for exempt paths (static files, API routes, etc.)
+    // These paths are part of normal framework operation
+    if (this.firewall && this.firewall.isPathExempt(url)) {
+      return { allowed: true, threats: [], threatScore: 0, exemptPath: true };
+    }
 
     // Initialize behavior tracking for new IPs
     // This enables behavioral analysis and bot detection
@@ -375,6 +399,13 @@ class AdvancedSecurity {
   }
 
   detectDirectoryTraversal(url, headers) {
+    // Skip detection for framework paths
+    // Next.js uses paths like /_next/static/... which can contain dots
+    // that might trigger false positives for directory traversal
+    if (this.firewall && this.firewall.isPathExempt(url)) {
+      return { detected: false, reason: 'exempt_path' };
+    }
+
     const fullContent = `${url} ${JSON.stringify(headers)}`;
     
     for (const pattern of this.directoryTraversalPatterns) {
@@ -439,16 +470,43 @@ class AdvancedSecurity {
   }
 
   detectCommandInjection(url, headers) {
-    const fullContent = `${url} ${JSON.stringify(headers)}`;
+    // Skip detection for framework paths and static files
+    // Webpack chunks, source maps, and other framework files can contain
+    // special characters that look like shell metacharacters but are harmless
+    // Example: chunk.[hash].js?v=123, sourcemap.map.js, etc.
+    if (this.firewall && this.firewall.isPathExempt(url)) {
+      return { detected: false, reason: 'exempt_path' };
+    }
+
+    // CRITICAL FIX: Only check URL and query params, NOT headers
+    // Headers contain legitimate special characters (Accept-Encoding: gzip, deflate, br)
+    // JSON.stringify(headers) adds {}, [], : which triggers false positives
+    // User-Agent, Accept headers are safe and should not be checked for command injection
+    const urlOnly = url; // Only check the actual URL path
+    
+    // Very short URLs (< 10 chars) are unlikely to contain command injection
+    // This prevents false positives on paths like /, /api, /home
+    if (urlOnly.length < 10) {
+      return { detected: false, reason: 'url_too_short' };
+    }
     
     for (const pattern of this.commandInjectionPatterns) {
-      const matches = fullContent.match(pattern);
-      if (matches && matches.length > 3) { // Threshold to avoid false positives
-        return {
-          detected: true,
-          pattern: pattern.toString(),
-          location: url,
-        };
+      const matches = urlOnly.match(pattern);
+      // Command injection requires actual command execution patterns
+      // Single special char is not enough - need command context
+      if (matches && matches.length >= 1) {
+        // Additional validation: check if it looks like a real command injection
+        // Real attacks have patterns like: ?cmd=ls|cat, ?exec=$(whoami), etc.
+        const hasCommandContext = /(\?|&)(cmd|exec|command|run|shell)=/i.test(urlOnly) ||
+                                   /(;|&&|\|\|)\s*(cat|ls|whoami|id|pwd|curl|wget)/i.test(urlOnly);
+        
+        if (hasCommandContext) {
+          return {
+            detected: true,
+            pattern: pattern.toString(),
+            location: url,
+          };
+        }
       }
     }
     
@@ -535,10 +593,13 @@ class AdvancedSecurity {
     // 3. Many scan pattern hits - targeting common endpoints
     // 4. Sequential or systematic path exploration - not human-like
     
+    // Adjusted thresholds for framework compatibility:
+    // Frameworks like Next.js can easily make 50+ requests/sec during SSR
+    // Static file serving, API routes, and HMR generate high request rates
     const scanScore = 
       (uniquePathRatio > 0.8 ? 30 : 0) +
       (scanPatternHits > 5 ? 40 : scanPatternHits * 5) +
-      (requestRate > 10 ? 30 : 0); // More than 10 req/sec is suspicious
+      (requestRate > 50 ? 30 : 0); // Increased from 10 to 50 for framework compatibility
 
     if (scanScore >= 50) {
       behavior.scanScore += scanScore;
@@ -657,24 +718,41 @@ class AdvancedSecurity {
     
     // Calculate bot indicators
     const avgTime = interRequestTimes.reduce((a, b) => a + b, 0) / interRequestTimes.length;
-    const isSuperhuman = veryFastRequests >= 3 || (avgTime < 100 && fastRequests >= 5);
+    
+    // VERY relaxed superhuman detection for browser page loads
+    // Browsers load HTML, then immediately make 20-50 parallel requests for CSS/JS/images
+    // All these arrive within milliseconds of each other - this is NORMAL, not bot activity
+    // Only flag as bot if EXTREME sustained superhuman speed (10+ requests at <10ms intervals)
+    // This allows normal browser parallel loading while catching real bots
+    const extremelyFastRequests = interRequestTimes.filter(t => t < 10).length; // < 10ms = likely parallel browser requests
+    const isSuperhuman = extremelyFastRequests >= 10 || (avgTime < 20 && veryFastRequests >= 15);
     
     // Additional bot checks
     const userAgent = recentRequests[0]?.userAgent || '';
     const hasNoUserAgent = !userAgent;
-    const hasBotUserAgent = /bot|crawler|spider|scraper|curl|wget|python|ruby|java/i.test(userAgent);
+    
+    // Updated bot user-agent detection to exclude legitimate frameworks
+    // Next.js, node-fetch, axios, etc. are legitimate HTTP clients
+    // Only flag known malicious crawlers/scrapers
+    const hasBotUserAgent = /bot|crawler|spider|scraper|curl|wget|python-requests/i.test(userAgent) &&
+                            !/next\.js|node-fetch|axios|undici/i.test(userAgent); // Exclude legitimate frameworks
     
     // Pattern consistency (bots often have very consistent timing)
     const timingVariance = this.calculateVariance(interRequestTimes);
     const hasConsistentTiming = timingVariance < 100; // Very consistent = bot
 
+    // Bot scoring with high threshold to avoid blocking browsers
+    // Modern browsers with HTTP/2 or parallel connections can send 50+ requests simultaneously
+    // This is normal behavior during page load and should NOT be flagged as bot
     const botScore = 
       (isSuperhuman ? 50 : 0) +
       (hasNoUserAgent ? 30 : 0) +
       (hasBotUserAgent ? 20 : 0) +
-      (hasConsistentTiming && avgTime < 500 ? 20 : 0);
+      (hasConsistentTiming && avgTime < 100 ? 20 : 0); // Increased from 500 to 100
 
-    if (botScore >= 50) {
+    // Very high threshold to prevent false positives on legitimate browser traffic
+    // Browsers loading a page generate burst traffic that looks "bot-like" but isn't
+    if (botScore >= 80) { // Increased from 50 to 80
       behavior.isBot = true;
       return {
         isBot: true,

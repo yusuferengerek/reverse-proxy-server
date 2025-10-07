@@ -26,6 +26,8 @@ class Firewall {
     this.ipRequests = new Map();       // IP -> request count tracking
     this.bannedIPs = new Set();        // Set of banned IP addresses
     this.suspiciousAttempts = new Map(); // IP -> suspicious attempt count
+    this.whitelistedIPs = new Set(this.options.whitelistedIPs || []); // Whitelisted IPs
+    this.exemptPaths = this.options.exemptPaths || []; // Paths exempt from strict checks (framework internal requests)
     
     // Convert string patterns to RegExp objects for efficient matching
     this.suspiciousRegexPatterns = this.options.suspiciousPatterns.map(pattern => {
@@ -78,11 +80,76 @@ class Firewall {
            req.socket.remoteAddress;
   }
 
+  /**
+   * Check if an IP is whitelisted
+   * Whitelisted IPs bypass all firewall checks
+   * @param {string} ip - IP address to check
+   * @returns {boolean} True if IP is whitelisted
+   */
+  isIPWhitelisted(ip) {
+    return this.whitelistedIPs.has(ip) || 
+           this.whitelistedIPs.has('localhost') && (ip === '::1' || ip === '127.0.0.1');
+  }
+
+  /**
+   * Check if request path is exempt from strict security checks
+   * Framework internal requests (Next.js, Nuxt, etc.) need special handling
+   * @param {string} path - Request URL path
+   * @returns {boolean} True if path should be exempt from strict checks
+   */
+  isPathExempt(path) {
+    // Check if path matches any exempt patterns
+    // Next.js: /_next/*, /api/*, /__nextjs*
+    // Nuxt: /_nuxt/*
+    // Static files: .js, .css, .map, fonts, images
+    return this.exemptPaths.some(pattern => path.includes(pattern));
+  }
+
+  /**
+   * Detect if request is from a framework (Next.js, Nuxt, etc.)
+   * These frameworks make internal requests that can trigger false positives
+   * @param {Object} req - HTTP request object
+   * @returns {boolean} True if request appears to be from a framework
+   */
+  isFrameworkRequest(req) {
+    const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+    const path = req.url || '';
+    
+    // Check for framework signatures
+    // Next.js internal requests often have these characteristics
+    const frameworkSignatures = [
+      'next.js',
+      'nuxt.js',
+      'vercel',
+      'webpack',
+      '__webpack',
+      path.includes('/_next/'),
+      path.includes('/_nuxt/'),
+      path.includes('/__nextjs'),
+      path.includes('.hot-update.'), // HMR (Hot Module Replacement)
+      req.headers['x-middleware-prefetch'], // Next.js middleware
+      req.headers['x-nextjs-data'], // Next.js data fetching
+    ];
+    
+    return frameworkSignatures.some(sig => 
+      typeof sig === 'string' ? userAgent.includes(sig) : sig
+    );
+  }
+
   isIPBanned(ip) {
+    // Never ban whitelisted IPs
+    if (this.isIPWhitelisted(ip)) {
+      return false;
+    }
     return this.bannedIPs.has(ip);
   }
 
   banIP(ip, reason = 'Manual ban') {
+    // Prevent banning whitelisted IPs
+    if (this.isIPWhitelisted(ip)) {
+      console.warn(`Attempted to ban whitelisted IP: ${ip} - Prevented`);
+      return;
+    }
     this.bannedIPs.add(ip);
     this.saveBannedIPs();
     console.error(`IP banned: ${ip} - ${reason}`);
@@ -100,6 +167,10 @@ class Firewall {
    * within a configured time window. Automatically bans IPs that exceed
    * the limit multiple times (configurable threshold).
    * 
+   * IMPORTANT: Modern web browsers make 20-50 parallel requests when loading a page
+   * (HTML, CSS, JS, images, fonts, etc.). This is normal behavior and should NOT
+   * trigger rate limiting during initial page load.
+   * 
    * @param {string} ip - Client IP address
    * @returns {boolean} True if request is allowed, false if rate limit exceeded
    */
@@ -107,9 +178,9 @@ class Firewall {
     const now = Date.now();
     const record = this.ipRequests.get(ip);
 
-    // First request from this IP
+    // First request from this IP - always allow
     if (!record) {
-      this.ipRequests.set(ip, { count: 1, lastReset: now });
+      this.ipRequests.set(ip, { count: 1, lastReset: now, burstAllowed: true });
       return true;
     }
 
@@ -117,18 +188,31 @@ class Firewall {
     if (now - record.lastReset > this.options.rateLimitWindow) {
       record.count = 1;
       record.lastReset = now;
+      record.burstAllowed = true; // Reset burst allowance for new window
       return true;
     }
 
     // Increment request count
     record.count++;
 
+    // Allow initial burst for page load (first 3 seconds of activity)
+    // Browsers loading a page generate massive parallel requests - this is NORMAL
+    const timeSinceFirstRequest = now - record.lastReset;
+    const isInitialBurst = timeSinceFirstRequest < 3000; // Within first 3 seconds
+    
+    // During initial burst, allow 3x the normal rate limit
+    // This accommodates browser parallel loading of resources
+    const effectiveLimit = isInitialBurst ? this.options.rateLimit * 3 : this.options.rateLimit;
+
     // Check if limit exceeded
-    if (record.count > this.options.rateLimit) {
+    if (record.count > effectiveLimit) {
       const attempts = (this.suspiciousAttempts.get(ip) || 0) + 1;
       this.suspiciousAttempts.set(ip, attempts);
 
-      if (attempts >= 3) {
+      // Only ban after 5 violations (increased from 3)
+      // This prevents banning legitimate users with slow connections
+      // who might refresh the page multiple times
+      if (attempts >= 5) {
         this.banIP(ip, 'Rate limit exceeded multiple times');
       }
       
@@ -140,6 +224,13 @@ class Firewall {
 
   checkSuspiciousContent(url, headers, body) {
     const content = `${url} ${JSON.stringify(headers)} ${body || ''}`;
+
+    // Skip pattern checking for framework internal requests
+    // Next.js/Nuxt static files and API routes can contain special characters
+    // that might trigger false positives (e.g., .map files, webpack chunks)
+    if (this.isPathExempt(url)) {
+      return { suspicious: false, reason: 'exempt_path' };
+    }
 
     for (const pattern of this.suspiciousRegexPatterns) {
       if (pattern.test(content)) {
@@ -174,6 +265,8 @@ class Firewall {
    * Comprehensive Request Inspection
    * 
    * Performs multi-layer security checks on incoming requests:
+   * 0. Whitelist check (bypass all checks for trusted IPs)
+   * 0.5. Framework request detection (relaxed checks for internal requests)
    * 1. IP ban status check
    * 2. Rate limiting
    * 3. File upload restrictions
@@ -185,6 +278,21 @@ class Firewall {
    */
   async inspect(req) {
     const ip = this.getClientIP(req);
+    const isFramework = this.isFrameworkRequest(req);
+    const isExemptPath = this.isPathExempt(req.url || '');
+
+    // Whitelist check - bypass all checks for trusted IPs
+    // Localhost and whitelisted IPs are always allowed
+    if (this.isIPWhitelisted(ip)) {
+      return { allowed: true, ip, whitelisted: true };
+    }
+
+    // Framework request detection - relaxed security for internal framework operations
+    // Next.js, Nuxt, etc. make many internal requests that can trigger false positives
+    // These requests should have relaxed rate limits and pattern checks
+    if (isFramework || isExemptPath) {
+      return { allowed: true, ip, framework: true, exemptPath: isExemptPath };
+    }
 
     // Check if IP is banned
     if (this.isIPBanned(ip)) {

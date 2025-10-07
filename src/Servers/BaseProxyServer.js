@@ -51,6 +51,15 @@ class BaseProxyServer {
       proxyReq.setHeader('X-Forwarded-Proto', this.serverType);
       proxyReq.setHeader('X-Forwarded-Host', req.headers.host);
     });
+
+    // CRITICAL FIX: Add security headers to proxied response (not request!)
+    // Next.js and other frameworks need their response headers preserved
+    // Security headers must be added AFTER proxy receives backend response
+    // This prevents CSP from blocking Next.js inline scripts/styles during hydration
+    this.proxy.on('proxyRes', (proxyRes, req, res) => {
+      // Add security headers to the proxied response
+      this.addSecurityHeaders(res, proxyRes);
+    });
   }
 
   setupWebSocketHandling() {
@@ -144,22 +153,36 @@ class BaseProxyServer {
     return requestPath.startsWith(routePath);
   }
 
-  addSecurityHeaders(res) {
+  addSecurityHeaders(res, proxyRes) {
     const security = configs.security;
 
+    // Only add HSTS for HTTPS
     if (security.enableHSTS && this.serverType === 'https') {
       res.setHeader('Strict-Transport-Security', 
         `max-age=${security.hstsMaxAge}; includeSubDomains; preload`);
     }
 
-    if (security.enableCSP) {
-      res.setHeader('Content-Security-Policy', security.cspPolicy);
+    // CRITICAL: Check if response is HTML before adding CSP
+    // Next.js serves JS/CSS/JSON that should NOT have CSP applied
+    // CSP blocks inline scripts/styles which breaks Next.js hydration
+    const contentType = proxyRes ? proxyRes.headers['content-type'] : '';
+    const isHTML = contentType && contentType.includes('text/html');
+    
+    if (security.enableCSP && isHTML) {
+      // Relaxed CSP for Next.js compatibility
+      // Allow 'unsafe-inline' for Next.js inline scripts and styles
+      const nextJsCSP = security.cspPolicy
+        .replace("script-src 'self'", "script-src 'self' 'unsafe-inline' 'unsafe-eval'")
+        .replace("style-src 'self'", "style-src 'self' 'unsafe-inline'");
+      
+      res.setHeader('Content-Security-Policy', nextJsCSP);
     }
 
     if (security.enableXFrameOptions) {
       res.setHeader('X-Frame-Options', security.xFrameOptions);
     }
 
+    // These are safe for all content types
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -204,11 +227,10 @@ class BaseProxyServer {
         return;
       }
 
-      // Add security headers
-      this.addSecurityHeaders(res);
-
       // Health check
       if (configs.healthCheck.enabled && req.url === configs.healthCheck.path) {
+        // Add security headers for health check response
+        this.addSecurityHeaders(res);
         return this.handleHealthCheck(req, res);
       }
 
@@ -217,6 +239,8 @@ class BaseProxyServer {
         const securityResult = await this.advancedSecurity.analyze(req);
         
         if (!securityResult.allowed) {
+          // Add security headers for error response
+          this.addSecurityHeaders(res);
           res.writeHead(securityResult.statusCode, { 
             'Content-Type': 'application/json',
             'X-Security-Block': 'true'
@@ -255,6 +279,8 @@ class BaseProxyServer {
         const firewallResult = await this.firewall.inspect(req);
 
         if (!firewallResult.allowed) {
+          // Add security headers for error response
+          this.addSecurityHeaders(res);
           res.writeHead(firewallResult.statusCode, { 'Content-Type': 'text/plain' });
           res.end(firewallResult.message);
           this.logger.warn('Request blocked by firewall', {
@@ -271,6 +297,8 @@ class BaseProxyServer {
       const target = this.resolveTarget(req);
 
       if (!target) {
+        // Add security headers for 404 response
+        this.addSecurityHeaders(res);
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');
         this.logger.warn('No route found', {
@@ -311,6 +339,8 @@ class BaseProxyServer {
       });
 
       if (!res.headersSent) {
+        // Add security headers for 500 response
+        this.addSecurityHeaders(res);
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end('Internal Server Error');
       }

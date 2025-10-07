@@ -90,6 +90,11 @@ class HttpsProxyServer extends BaseProxyServer {
       this.handleRequest(req, res);
     });
 
+    // Fix EventEmitter memory leak warning
+    // High-traffic servers generate many simultaneous socket connections
+    // Increase max listeners to prevent warnings during normal operation
+    this.server.setMaxListeners(100);
+
     // WebSocket support for HTTPS
     if (configs.websocket.enabled) {
       this.server.on('upgrade', (req, socket, head) => {

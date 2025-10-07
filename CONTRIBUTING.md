@@ -9,7 +9,7 @@ Thank you for considering contributing to this project! 🎉
 
 2. **Clone Your Fork**
    ```bash
-   git clone https://github.com/yusuferengerek/reverse-proxy-server.git
+   git clone https://github.com/YOUR-USERNAME/reverse-proxy-server.git
    cd reverse-proxy-server
    ```
 
@@ -158,4 +158,3 @@ Your contributions will be published under the MIT license.
 ---
 
 Thank you again! 🙏
-

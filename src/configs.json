@@ -15,12 +15,44 @@
   },
   "firewall": {
     "enabled": true,
-    "rateLimit": 100,
+    "rateLimit": 1000,
     "rateLimitWindow": 60000,
     "maxBodySize": 10485760,
     "maxFileSize": 5242880,
     "blockFileUploads": false,
     "bannedIPsPath": "./src/Data/banned-ips.json",
+    "whitelistedIPs": [
+      "127.0.0.1",
+      "::1",
+      "localhost"
+    ],
+    "exemptPaths": [
+      "/",
+      "/favicon.ico",
+      "/_next/",
+      "/api/",
+      "/__nextjs",
+      "/static/",
+      "/assets/",
+      "/public/",
+      "/_nuxt/",
+      "/dist/",
+      "/build/",
+      ".js",
+      ".css",
+      ".map",
+      ".woff",
+      ".woff2",
+      ".ttf",
+      ".eot",
+      ".svg",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".webp",
+      ".ico"
+    ],
     "suspiciousPatterns": [
       "\\.\\.[\\/\\\\]",
       "etc\\/passwd",
@@ -39,7 +71,7 @@
     "enableHSTS": true,
     "hstsMaxAge": 31536000,
     "enableCSP": true,
-    "cspPolicy": "default-src 'self'",
+    "cspPolicy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'",
     "enableCORS": true,
     "corsOrigin": "*",
     "enableXFrameOptions": true,
@@ -63,7 +95,7 @@
   },
   "admin": {
     "enabled": true,
-    "port": 9090,
+    "port": 63537,
     "token": "change-this-secret-token",
     "allowedIPs": []
   },
@@ -74,4 +106,3 @@
     "directory": "./logs"
   }
 }
-
