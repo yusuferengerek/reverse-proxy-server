@@ -1,0 +1,390 @@
+const httpProxy = require('http-proxy');
+const { DomainManager } = require('../Utils/DomainManager');
+const { Firewall } = require('../Utils/Firewall');
+const { AdvancedSecurity } = require('../Utils/AdvancedSecurity');
+const { getLogger } = require('../Utils/Logger');
+const configs = require('../configs.json');
+
+class BaseProxyServer {
+  constructor(serverType = 'http') {
+    this.serverType = serverType;
+    this.logger = getLogger();
+    this.proxy = httpProxy.createProxyServer({
+      xfwd: true,
+      preserveHeaderKeyCase: true,
+      autoRewrite: true,
+      secure: false,
+      changeOrigin: true,
+      proxyTimeout: configs.timeout.proxy,
+      timeout: configs.timeout.server
+    });
+
+    this.domainManager = new DomainManager();
+    this.firewall = configs.firewall.enabled ? new Firewall() : null;
+    this.advancedSecurity = configs.firewall.enabled ? new AdvancedSecurity(this.firewall) : null;
+    this.server = null;
+    this.activeConnections = new Set();
+
+    this.setupProxyErrorHandling();
+    this.setupWebSocketHandling();
+  }
+
+  setupProxyErrorHandling() {
+    this.proxy.on('error', (err, req, res) => {
+      this.logger.error(`Proxy error: ${req.headers.host}${req.url}`, {
+        error: err.message,
+        stack: err.stack,
+        type: this.serverType
+      });
+
+      if (!res.headersSent) {
+        res.writeHead(502, { 
+          'Content-Type': 'text/plain',
+          'X-Proxy-Error': 'true'
+        });
+        res.end('Bad Gateway');
+      }
+    });
+
+    this.proxy.on('proxyReq', (proxyReq, req, res) => {
+      // Add custom headers
+      proxyReq.setHeader('X-Forwarded-Proto', this.serverType);
+      proxyReq.setHeader('X-Forwarded-Host', req.headers.host);
+    });
+  }
+
+  setupWebSocketHandling() {
+    if (!configs.websocket.enabled) return;
+
+    this.proxy.on('upgrade', (req, socket, head) => {
+      this.logger.info('WebSocket upgrade request', {
+        host: req.headers.host,
+        url: req.url
+      });
+    });
+
+    this.proxy.on('error', (err, req, socket) => {
+      this.logger.error('WebSocket error', {
+        error: err.message,
+        host: req.headers.host
+      });
+      socket.end();
+    });
+  }
+
+  resolveTarget(req) {
+    const host = req.headers.host || '';
+    const url = req.url || '/';
+    const parts = host.split('.');
+
+    if (parts.length < 2) return null;
+
+    let subdomain = null;
+    let domain = null;
+
+    if (parts.length === 2) {
+      domain = host;
+    } else {
+      subdomain = parts[0];
+      domain = parts.slice(1).join('.');
+    }
+
+    const domainConfig = this.domainManager.getDomain(domain);
+    if (!domainConfig) return null;
+
+    // Check subdomain routes first
+    if (subdomain && domainConfig.subdomains[subdomain]) {
+      const routes = domainConfig.subdomains[subdomain];
+
+      for (const route of routes) {
+        if (route.redirect) {
+          return {
+            type: 'redirect',
+            target: route.redirect,
+            domain: domain
+          };
+        }
+
+        if (route.path && this.matchPath(url, route.path)) {
+          return {
+            type: 'proxy',
+            port: route.port,
+            host: route.host || 'localhost'
+          };
+        }
+      }
+    }
+
+    // Check domain routes
+    if (domainConfig.routes && domainConfig.routes.length > 0) {
+      for (const route of domainConfig.routes) {
+        if (route.redirect) {
+          return {
+            type: 'redirect',
+            target: route.redirect,
+            domain: domain
+          };
+        }
+
+        if (route.path && this.matchPath(url, route.path)) {
+          return {
+            type: 'proxy',
+            port: route.port,
+            host: route.host || 'localhost'
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  matchPath(requestPath, routePath) {
+    if (routePath === requestPath || routePath === '/') return true;
+    return requestPath.startsWith(routePath);
+  }
+
+  addSecurityHeaders(res) {
+    const security = configs.security;
+
+    if (security.enableHSTS && this.serverType === 'https') {
+      res.setHeader('Strict-Transport-Security', 
+        `max-age=${security.hstsMaxAge}; includeSubDomains; preload`);
+    }
+
+    if (security.enableCSP) {
+      res.setHeader('Content-Security-Policy', security.cspPolicy);
+    }
+
+    if (security.enableXFrameOptions) {
+      res.setHeader('X-Frame-Options', security.xFrameOptions);
+    }
+
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  }
+
+  handleCORS(req, res) {
+    if (!configs.security.enableCORS) return;
+
+    const origin = req.headers.origin;
+    const allowedOrigin = configs.security.corsOrigin;
+
+    if (allowedOrigin === '*' || allowedOrigin === origin) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Max-Age', '86400');
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return true;
+    }
+
+    return false;
+  }
+
+  async handleRequest(req, res) {
+    const startTime = Date.now();
+
+    // Track connection
+    this.activeConnections.add(req.socket);
+    req.socket.on('close', () => {
+      this.activeConnections.delete(req.socket);
+    });
+
+    try {
+      // CORS preflight
+      if (this.handleCORS(req, res)) {
+        return;
+      }
+
+      // Add security headers
+      this.addSecurityHeaders(res);
+
+      // Health check
+      if (configs.healthCheck.enabled && req.url === configs.healthCheck.path) {
+        return this.handleHealthCheck(req, res);
+      }
+
+      // Advanced Security Analysis
+      if (this.advancedSecurity) {
+        const securityResult = await this.advancedSecurity.analyze(req);
+        
+        if (!securityResult.allowed) {
+          res.writeHead(securityResult.statusCode, { 
+            'Content-Type': 'application/json',
+            'X-Security-Block': 'true'
+          });
+          res.end(JSON.stringify({
+            error: 'Request blocked for security reasons',
+            requestId: Date.now().toString(36)
+          }));
+          
+          this.logger.error('Request blocked by advanced security', {
+            ip: this.advancedSecurity.getClientIP(req),
+            reason: securityResult.reason,
+            threats: securityResult.threats,
+            threatScore: securityResult.threatScore,
+            host: req.headers.host,
+            url: req.url,
+            method: req.method,
+            userAgent: req.headers['user-agent']
+          });
+          return;
+        }
+
+        // Log medium-severity threats for monitoring
+        if (securityResult.threatScore > 0) {
+          this.logger.info('Security analysis completed', {
+            ip: this.advancedSecurity.getClientIP(req),
+            threatScore: securityResult.threatScore,
+            threats: securityResult.threats,
+            url: req.url
+          });
+        }
+      }
+
+      // Basic Firewall inspection
+      if (this.firewall) {
+        const firewallResult = await this.firewall.inspect(req);
+
+        if (!firewallResult.allowed) {
+          res.writeHead(firewallResult.statusCode, { 'Content-Type': 'text/plain' });
+          res.end(firewallResult.message);
+          this.logger.warn('Request blocked by firewall', {
+            ip: firewallResult.ip,
+            reason: firewallResult.message,
+            host: req.headers.host,
+            url: req.url
+          });
+          return;
+        }
+      }
+
+      // Resolve target
+      const target = this.resolveTarget(req);
+
+      if (!target) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+        this.logger.warn('No route found', {
+          host: req.headers.host,
+          url: req.url
+        });
+        return;
+      }
+
+      // Handle redirect
+      if (target.type === 'redirect') {
+        const protocol = this.serverType === 'https' ? 'https' : 'http';
+        const redirectUrl = `${protocol}://${target.target}.${target.domain}${req.url}`;
+        res.writeHead(301, { 'Location': redirectUrl });
+        res.end();
+        this.logger.info('Redirect', { from: req.headers.host, to: redirectUrl });
+        return;
+      }
+
+      // Handle proxy
+      if (target.type === 'proxy') {
+        const proxyTarget = `http://${target.host}:${target.port}`;
+        
+        // Log request
+        res.on('finish', () => {
+          const responseTime = Date.now() - startTime;
+          this.logger.logRequest(req, res, responseTime);
+        });
+
+        this.proxy.web(req, res, { target: proxyTarget });
+      }
+    } catch (error) {
+      this.logger.error('Request handling error', {
+        error: error.message,
+        stack: error.stack,
+        host: req.headers.host,
+        url: req.url
+      });
+
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Internal Server Error');
+      }
+    }
+  }
+
+  handleHealthCheck(req, res) {
+    const stats = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      type: this.serverType,
+      connections: this.activeConnections.size,
+      memory: process.memoryUsage(),
+      domains: this.domainManager.getAllDomains().length
+    };
+
+    if (this.firewall) {
+      stats.firewall = this.firewall.getStats();
+    }
+
+    if (this.advancedSecurity) {
+      stats.advancedSecurity = this.advancedSecurity.getStats();
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(stats, null, 2));
+  }
+
+  handleWebSocketUpgrade(req, socket, head) {
+    if (!configs.websocket.enabled) {
+      socket.destroy();
+      return;
+    }
+
+    const target = this.resolveTarget(req);
+    
+    if (!target || target.type !== 'proxy') {
+      socket.destroy();
+      return;
+    }
+
+    const wsTarget = `ws://${target.host}:${target.port}`;
+    this.proxy.ws(req, socket, head, { target: wsTarget });
+  }
+
+  stop() {
+    this.logger.info(`Stopping ${this.serverType} proxy server...`);
+    
+    // Close proxy
+    this.proxy.close();
+
+    // Close all active connections
+    for (const socket of this.activeConnections) {
+      socket.destroy();
+    }
+
+    // Close server
+    if (this.server) {
+      this.server.close(() => {
+        this.logger.info(`${this.serverType} server stopped`);
+        process.exit(0);
+      });
+    }
+  }
+
+  reload() {
+    this.logger.info('Reloading configuration...');
+    this.domainManager.reload();
+    if (this.firewall) {
+      this.firewall.loadBannedIPs();
+    }
+  }
+}
+
+module.exports = { BaseProxyServer };
+

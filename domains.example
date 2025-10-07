@@ -1,0 +1,60 @@
+# Domain Configuration Example
+
+# Example 1: Basic domain routing
+example.com:
+  routes: [
+    { path: /, port: 3000 }
+  ]
+
+# Example 2: Subdomain redirect
+mysite.com:
+  routes: [
+    { redirect: www }  # mysite.com -> www.mysite.com
+  ]
+  subdomains: {
+    www: [
+      { path: /, port: 3000 }
+    ]
+  }
+
+# Example 3: Multiple subdomains
+myapp.com:
+  routes: [
+    { redirect: www }
+  ]
+  subdomains: {
+    www: [
+      { path: /, port: 3000 }
+    ],
+    api: [
+      { path: /, port: 3001 }
+    ],
+    admin: [
+      { path: /, port: 3002 }
+    ],
+    cdn: [
+      { path: /, port: 3003 }
+    ]
+  }
+
+# Example 4: Path-based routing
+app.io:
+  routes: [
+    { path: /, port: 4000 },
+    { path: /api, port: 4001 },
+    { path: /admin, port: 4002 }
+  ]
+
+# Example 5: Subdomain + Path routing
+service.com:
+  subdomains: {
+    v1: [
+      { path: /api, port: 5001 },
+      { path: /auth, port: 5002 }
+    ],
+    v2: [
+      { path: /api, port: 6001 },
+      { path: /auth, port: 6002 }
+    ]
+  }
+
