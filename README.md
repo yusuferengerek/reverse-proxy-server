@@ -64,14 +64,11 @@ Modern, secure, and scalable reverse proxy server with HTTP/HTTPS support, integ
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/yusuferengerek/reverse-proxy-server
 cd reverse-proxy-server
 
 # Install dependencies
 npm install
-
-# Create configuration file
-cp .env.example .env
 
 # Add your SSL certificates (for HTTPS)
 # Structure: src/Certs/<domain>/privkey.pem and fullchain.pem
@@ -179,7 +176,7 @@ Admin API runs on port `9090` by default.
 All requests require the `Authorization` header:
 
 ```bash
-Authorization: Bearer your-secret-token
+Authorization: Bearer token
 ```
 
 ### Endpoints
@@ -297,7 +294,7 @@ Content-Type: application/json
 
 ```bash
 # Check server status
-curl -H "Authorization: Bearer change-this-secret-token" \
+curl -H "Authorization: Bearer token" \
   http://localhost:9090/api/status
 
 # Ban an IP
@@ -560,3 +557,4 @@ For questions or issues:
 ---
 
 **Note:** This project is production-ready and equipped with enterprise-level security features.
+
