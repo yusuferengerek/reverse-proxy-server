@@ -63,7 +63,7 @@
   },
   "admin": {
     "enabled": true,
-    "port": 63537,
+    "port": 9090,
     "token": "change-this-secret-token",
     "allowedIPs": []
   },
@@ -74,3 +74,4 @@
     "directory": "./logs"
   }
 }
+
