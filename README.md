@@ -64,14 +64,11 @@ Modern, secure, and scalable reverse proxy server with HTTP/HTTPS support, integ
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/yusuferengerek/reverse-proxy-server
 cd reverse-proxy-server
 
 # Install dependencies
 npm install
-
-# Create configuration file
-cp .env.example .env
 
 # Add your SSL certificates (for HTTPS)
 # Structure: src/Certs/<domain>/privkey.pem and fullchain.pem
@@ -560,3 +557,4 @@ For questions or issues:
 ---
 
 **Note:** This project is production-ready and equipped with enterprise-level security features.
+
