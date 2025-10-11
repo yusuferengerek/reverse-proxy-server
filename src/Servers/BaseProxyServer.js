@@ -227,11 +227,18 @@ class BaseProxyServer {
         return;
       }
 
-      // Health check
       if (configs.healthCheck.enabled && req.url === configs.healthCheck.path) {
-        // Add security headers for health check response
-        this.addSecurityHeaders(res);
-        return this.handleHealthCheck(req, res);
+        const host = req.headers.host || '';
+        const isLocalhost = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+        const isAllowedIP = configs.healthCheck.allowedIPs.includes(host);
+        
+        // Only serve health check for localhost, IP addresses, or health subdomain
+        if (isLocalhost || isAllowedIP ) {
+          // Add security headers for health check response
+          this.addSecurityHeaders(res);
+          return this.handleHealthCheck(req, res);
+        }
+        // Otherwise, continue to route resolution (will proxy to backend)
       }
 
       // Advanced Security Analysis
@@ -417,4 +424,5 @@ class BaseProxyServer {
 }
 
 module.exports = { BaseProxyServer };
+
 
