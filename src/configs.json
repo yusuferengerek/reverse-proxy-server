@@ -15,7 +15,7 @@
   },
   "firewall": {
     "enabled": true,
-    "rateLimit": 1000,
+    "rateLimit": 100,
     "rateLimitWindow": 60000,
     "maxBodySize": 10485760,
     "maxFileSize": 5242880,
@@ -90,6 +90,7 @@
     "enabled": true
   },
   "healthCheck": {
+    "allowedIPs": ["::1","127.0.0.1"],
     "enabled": true,
     "path": "/health"
   },
@@ -106,3 +107,4 @@
     "directory": "./logs"
   }
 }
+
