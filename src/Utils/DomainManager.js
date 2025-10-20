@@ -31,7 +31,7 @@ class DomainManager {
 
       if (!trimmed || trimmed.startsWith('#')) continue;
 
-      if (trimmed.match(/^[\w.-]+:\s*$/)) {
+      if (/^[^:\s]+:\s*$/.test(trimmed)) {
         currentDomain = trimmed.slice(0, -1);
         this.domains[currentDomain] = {
           routes: [],
@@ -117,5 +117,6 @@ class DomainManager {
     this.loadConfig();
   }
 }
+
 
 module.exports = { DomainManager };
