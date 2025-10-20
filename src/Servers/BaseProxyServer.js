@@ -82,38 +82,39 @@ class BaseProxyServer {
   }
 
   resolveTarget(req) {
-    const host = req.headers.host || '';
+    const host = req.headers.host?.split(':')[0] || '';
     const url = req.url || '/';
     const parts = host.split('.');
 
     if (parts.length < 2) return null;
-
-    let subdomain = null;
     let domain = null;
+    let subdomain = null;
 
-    if (parts.length === 2) {
-      domain = host;
-    } else {
-      subdomain = parts[0];
-      domain = parts.slice(1).join('.');
+    for (let i = 0; i < parts.length - 1; i++) {
+      const candidate = parts.slice(i).join('.');
+      const domainConfig = this.domainManager.getDomain(candidate);
+      if (domainConfig) {
+        domain = candidate;
+        if (i > 0) subdomain = parts.slice(0, i).join('.');
+        break;
+      }
     }
 
+    if (!domain) return null;
     const domainConfig = this.domainManager.getDomain(domain);
     if (!domainConfig) return null;
 
-    // Check subdomain routes first
+    // --- SUBDOMAIN ROUTES ---
     if (subdomain && domainConfig.subdomains[subdomain]) {
       const routes = domainConfig.subdomains[subdomain];
-
       for (const route of routes) {
         if (route.redirect) {
           return {
             type: 'redirect',
             target: route.redirect,
-            domain: domain
+            domain
           };
         }
-
         if (route.path && this.matchPath(url, route.path)) {
           return {
             type: 'proxy',
@@ -124,17 +125,16 @@ class BaseProxyServer {
       }
     }
 
-    // Check domain routes
+    // --- DOMAIN ROUTES ---
     if (domainConfig.routes && domainConfig.routes.length > 0) {
       for (const route of domainConfig.routes) {
         if (route.redirect) {
           return {
             type: 'redirect',
             target: route.redirect,
-            domain: domain
+            domain
           };
         }
-
         if (route.path && this.matchPath(url, route.path)) {
           return {
             type: 'proxy',
@@ -147,6 +147,7 @@ class BaseProxyServer {
 
     return null;
   }
+
 
   matchPath(requestPath, routePath) {
     if (routePath === requestPath || routePath === '/') return true;
@@ -424,5 +425,6 @@ class BaseProxyServer {
 }
 
 module.exports = { BaseProxyServer };
+
 
 
