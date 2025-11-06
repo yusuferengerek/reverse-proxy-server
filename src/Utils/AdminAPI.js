@@ -112,7 +112,8 @@ class AdminAPI {
       this.logger.error('Admin API error', {
         error: error.message,
         stack: error.stack,
-        path
+        path,
+        ip: this.getClientIP(req)
       });
 
       res.writeHead(500, { 'Content-Type': 'application/json' });

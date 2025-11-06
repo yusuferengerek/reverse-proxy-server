@@ -34,7 +34,8 @@ class BaseProxyServer {
       this.logger.error(`Proxy error: ${req.headers.host}${req.url}`, {
         error: err.message,
         stack: err.stack,
-        type: this.serverType
+        type: this.serverType,
+        ip: this.logger.getClientIP(req)
       });
 
       if (!res.headersSent) {
@@ -68,14 +69,16 @@ class BaseProxyServer {
     this.proxy.on('upgrade', (req, socket, head) => {
       this.logger.info('WebSocket upgrade request', {
         host: req.headers.host,
-        url: req.url
+        url: req.url,
+        ip: this.logger.getClientIP(req)
       });
     });
 
     this.proxy.on('error', (err, req, socket) => {
       this.logger.error('WebSocket error', {
         error: err.message,
-        host: req.headers.host
+        host: req.headers.host,
+        ip: this.logger.getClientIP(req)
       });
       socket.end();
     });
@@ -311,7 +314,8 @@ class BaseProxyServer {
         res.end('Not Found');
         this.logger.warn('No route found', {
           host: req.headers.host,
-          url: req.url
+          url: req.url,
+          ip: this.logger.getClientIP(req)
         });
         return;
       }
@@ -322,7 +326,11 @@ class BaseProxyServer {
         const redirectUrl = `${protocol}://${target.target}.${target.domain}${req.url}`;
         res.writeHead(301, { 'Location': redirectUrl });
         res.end();
-        this.logger.info('Redirect', { from: req.headers.host, to: redirectUrl });
+        this.logger.info('Redirect', { 
+          from: req.headers.host, 
+          to: redirectUrl,
+          ip: this.logger.getClientIP(req)
+        });
         return;
       }
 
@@ -343,7 +351,8 @@ class BaseProxyServer {
         error: error.message,
         stack: error.stack,
         host: req.headers.host,
-        url: req.url
+        url: req.url,
+        ip: this.logger.getClientIP(req)
       });
 
       if (!res.headersSent) {

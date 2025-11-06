@@ -21,7 +21,11 @@ class HttpProxyServer extends BaseProxyServer {
           'X-Redirect-Reason': 'Force HTTPS'
         });
         res.end();
-        this.logger.info('HTTP to HTTPS redirect', { host, url: req.url });
+        this.logger.info('HTTP to HTTPS redirect', { 
+          host, 
+          url: req.url,
+          ip: this.logger.getClientIP(req)
+        });
         return;
       }
 
