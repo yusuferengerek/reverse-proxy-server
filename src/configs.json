@@ -4,7 +4,7 @@
     "port": 80
   },
   "https": {
-    "enabled": true,
+    "enabled": false,
     "port": 443,
     "certPath": "./src/Certs",
     "forceHttps": true,
@@ -107,4 +107,5 @@
     "directory": "./logs"
   }
 }
+
 
