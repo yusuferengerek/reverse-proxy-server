@@ -88,6 +88,8 @@ class DomainManager {
       
       if (value.startsWith("'") || value.startsWith('"')) {
         value = value.slice(1, -1);
+      } else if (value === 'true' || value === 'false') {
+        value = value === 'true';
       } else if (!isNaN(value)) {
         value = parseInt(value);
       }

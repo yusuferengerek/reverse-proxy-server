@@ -122,7 +122,9 @@ class BaseProxyServer {
           return {
             type: 'proxy',
             port: route.port,
-            host: route.host || 'localhost'
+            host: route.host || 'localhost',
+            routePath: route.path,
+            preservePath: route.preservePath === true
           };
         }
       }
@@ -142,7 +144,9 @@ class BaseProxyServer {
           return {
             type: 'proxy',
             port: route.port,
-            host: route.host || 'localhost'
+            host: route.host || 'localhost',
+            routePath: route.path,
+            preservePath: route.preservePath === true
           };
         }
       }
@@ -153,8 +157,32 @@ class BaseProxyServer {
 
 
   matchPath(requestPath, routePath) {
-    if (routePath === requestPath || routePath === '/') return true;
-    return requestPath.startsWith(routePath);
+    const pathOnly = (requestPath || '').split('?')[0];
+    if (routePath === '/' || pathOnly === routePath) return true;
+    if (!pathOnly.startsWith(routePath)) return false;
+    const nextChar = pathOnly.charAt(routePath.length);
+    return nextChar === '' || nextChar === '/';
+  }
+
+  rewritePathForProxy(req, target) {
+    if (!target || target.preservePath || !target.routePath || target.routePath === '/') {
+      return;
+    }
+
+    const currentUrl = req.url || '/';
+    const [pathPart, queryPart] = currentUrl.split('?', 2);
+
+    if (!pathPart.startsWith(target.routePath)) return;
+
+    let newPath = pathPart.slice(target.routePath.length);
+    if (newPath === '' || newPath[0] !== '/') {
+      newPath = `/${newPath}`;
+    }
+    if (newPath === '') newPath = '/';
+
+    const queryString = queryPart ? `?${queryPart}` : '';
+    req.originalUrl = req.originalUrl || currentUrl;
+    req.url = `${newPath}${queryString}`;
   }
 
   addSecurityHeaders(res, proxyRes) {
@@ -218,6 +246,9 @@ class BaseProxyServer {
 
   async handleRequest(req, res) {
     const startTime = Date.now();
+    if (!req.originalUrl) {
+      req.originalUrl = req.url;
+    }
 
     // Track connection
     this.activeConnections.add(req.socket);
@@ -337,6 +368,7 @@ class BaseProxyServer {
       // Handle proxy
       if (target.type === 'proxy') {
         const proxyTarget = `http://${target.host}:${target.port}`;
+        this.rewritePathForProxy(req, target);
         
         // Log request
         res.on('finish', () => {
@@ -434,8 +466,6 @@ class BaseProxyServer {
 }
 
 module.exports = { BaseProxyServer };
-
-
 
 
 

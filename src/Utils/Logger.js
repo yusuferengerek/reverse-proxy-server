@@ -99,7 +99,7 @@ class Logger {
   logRequest(req, res, responseTime) {
     const logData = {
       method: req.method,
-      url: req.url,
+      url: req.originalUrl || req.url,
       host: req.headers.host,
       ip: this.getClientIP(req),
       statusCode: res.statusCode,
