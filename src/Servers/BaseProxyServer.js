@@ -107,52 +107,87 @@ class BaseProxyServer {
     const domainConfig = this.domainManager.getDomain(domain);
     if (!domainConfig) return null;
 
-    // --- SUBDOMAIN ROUTES ---
-    if (subdomain && domainConfig.subdomains[subdomain]) {
-      const routes = domainConfig.subdomains[subdomain];
-      for (const route of routes) {
-        if (route.redirect) {
-          return {
-            type: 'redirect',
-            target: route.redirect,
-            domain
-          };
+    const matchAgainstRoutes = (pathToMatch) => {
+      // --- SUBDOMAIN ROUTES ---
+      if (subdomain && domainConfig.subdomains[subdomain]) {
+        const routes = domainConfig.subdomains[subdomain];
+        for (const route of routes) {
+          if (route.redirect) {
+            return {
+              type: 'redirect',
+              target: route.redirect,
+              domain
+            };
+          }
+          if (route.path && this.matchPath(pathToMatch, route.path)) {
+            return {
+              type: 'proxy',
+              port: route.port,
+              host: route.host || 'localhost',
+              routePath: route.path,
+              preservePath: route.preservePath === true,
+              matchedBy: 'direct'
+            };
+          }
         }
-        if (route.path && this.matchPath(url, route.path)) {
-          return {
-            type: 'proxy',
-            port: route.port,
-            host: route.host || 'localhost',
-            routePath: route.path,
-            preservePath: route.preservePath === true
-          };
+      }
+
+      // --- DOMAIN ROUTES ---
+      if (domainConfig.routes && domainConfig.routes.length > 0) {
+        for (const route of domainConfig.routes) {
+          if (route.redirect) {
+            return {
+              type: 'redirect',
+              target: route.redirect,
+              domain
+            };
+          }
+          if (route.path && this.matchPath(pathToMatch, route.path)) {
+            return {
+              type: 'proxy',
+              port: route.port,
+              host: route.host || 'localhost',
+              routePath: route.path,
+              preservePath: route.preservePath === true,
+              matchedBy: 'direct'
+            };
+          }
         }
+      }
+      return null;
+    };
+
+    const directTarget = matchAgainstRoutes(url);
+
+    // Also try matching based on Referer path so assets requested at root
+    // can still be routed to the app that served the page (useful for /fast-fingers + Next.js assets)
+    const referer = req.headers.referer;
+    let refererTarget = null;
+    if (referer) {
+      try {
+        const refUrl = new URL(referer);
+        const refHost = refUrl.hostname;
+        if (refHost === host) {
+          const refPath = refUrl.pathname || '/';
+          refererTarget = matchAgainstRoutes(refPath);
+          if (refererTarget) refererTarget.matchedBy = 'referer';
+        }
+      } catch (err) {
+        // ignore invalid referer
       }
     }
 
-    // --- DOMAIN ROUTES ---
-    if (domainConfig.routes && domainConfig.routes.length > 0) {
-      for (const route of domainConfig.routes) {
-        if (route.redirect) {
-          return {
-            type: 'redirect',
-            target: route.redirect,
-            domain
-          };
-        }
-        if (route.path && this.matchPath(url, route.path)) {
-          return {
-            type: 'proxy',
-            port: route.port,
-            host: route.host || 'localhost',
-            routePath: route.path,
-            preservePath: route.preservePath === true
-          };
-        }
+    // Prefer the referer target when direct match is catch-all ('/') or shorter than referer route
+    if (refererTarget) {
+      if (!directTarget) return refererTarget;
+      const directLen = directTarget.routePath ? directTarget.routePath.length : 0;
+      const refLen = refererTarget.routePath ? refererTarget.routePath.length : 0;
+      if (directTarget.routePath === '/' || refLen > directLen) {
+        return refererTarget;
       }
     }
 
-    return null;
+    return directTarget || null;
   }
 
 
@@ -162,6 +197,29 @@ class BaseProxyServer {
     if (!pathOnly.startsWith(routePath)) return false;
     const nextChar = pathOnly.charAt(routePath.length);
     return nextChar === '' || nextChar === '/';
+  }
+
+  isStaticAsset(pathOnly) {
+    const lower = pathOnly.toLowerCase();
+    return lower.startsWith('/_next/') ||
+           lower.startsWith('/static/') ||
+           lower.startsWith('/assets/') ||
+           lower.startsWith('/public/') ||
+           lower === '/favicon.ico' ||
+           lower.endsWith('.js') ||
+           lower.endsWith('.css') ||
+           lower.endsWith('.map') ||
+           lower.endsWith('.png') ||
+           lower.endsWith('.jpg') ||
+           lower.endsWith('.jpeg') ||
+           lower.endsWith('.gif') ||
+           lower.endsWith('.webp') ||
+           lower.endsWith('.ico') ||
+           lower.endsWith('.svg') ||
+           lower.endsWith('.woff') ||
+           lower.endsWith('.woff2') ||
+           lower.endsWith('.ttf') ||
+           lower.endsWith('.eot');
   }
 
   rewritePathForProxy(req, target) {
@@ -367,6 +425,32 @@ class BaseProxyServer {
 
       // Handle proxy
       if (target.type === 'proxy') {
+        const pathOnly = (req.url || '').split('?')[0];
+        if (
+          target.matchedBy === 'referer' &&
+          target.routePath &&
+          target.routePath !== '/' &&
+          !pathOnly.startsWith(target.routePath) &&
+          !this.isStaticAsset(pathOnly)
+        ) {
+          const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+          const prefix = target.routePath.endsWith('/') ? target.routePath.slice(0, -1) : target.routePath;
+          const normalizedPath = pathOnly.startsWith('/') ? pathOnly : `/${pathOnly}`;
+          const redirectPath = `${prefix}${normalizedPath}${query}`;
+
+          res.writeHead(302, { 
+            Location: redirectPath,
+            'X-Redirect-Reason': 'add-prefix-from-referer'
+          });
+          res.end();
+          this.logger.info('Prefix redirect', {
+            from: req.url,
+            to: redirectPath,
+            host: req.headers.host
+          });
+          return;
+        }
+
         const proxyTarget = `http://${target.host}:${target.port}`;
         this.rewritePathForProxy(req, target);
         
