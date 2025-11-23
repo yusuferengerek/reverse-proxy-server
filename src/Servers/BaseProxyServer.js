@@ -153,20 +153,8 @@ class BaseProxyServer {
 
 
   matchPath(requestPath, routePath) {
-    // Normalize paths by removing trailing slashes for comparison
-    const normalizeRoute = routePath === '/' ? '/' : routePath.replace(/\/$/, '');
-    const normalizePath = requestPath === '/' ? '/' : requestPath.replace(/\/$/, '');
-    
-    // Exact match
-    if (normalizeRoute === normalizePath) return true;
-    
-    // Root path matches everything
-    if (normalizeRoute === '/') return true;
-    
-    // Path prefix match (e.g., /api matches /api/users)
-    if (normalizePath.startsWith(normalizeRoute + '/')) return true;
-    
-    return false;
+    if (routePath === requestPath || routePath === '/') return true;
+    return requestPath.startsWith(routePath);
   }
 
   addSecurityHeaders(res, proxyRes) {
@@ -446,6 +434,7 @@ class BaseProxyServer {
 }
 
 module.exports = { BaseProxyServer };
+
 
 
 
