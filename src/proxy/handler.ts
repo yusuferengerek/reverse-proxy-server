@@ -79,6 +79,20 @@ export class ProxyHandler {
       return;
     }
 
+    // Store basePath for response rewriting
+    const basePath = route.path;
+    
+    // Setup response interceptor to rewrite URLs in response headers
+    this.setupResponseInterceptor(res, basePath);
+
+    // If basePath is not '/', rewrite the request URL to remove basePath before proxying
+    if (basePath !== '/' && req.url) {
+      // Remove basePath from the beginning of the URL
+      if (req.url.startsWith(basePath)) {
+        req.url = req.url.substring(basePath.length) || '/';
+      }
+    }
+
     // Proxy the request
     this.proxy.web(req, res, {
       target: route.target,
@@ -203,6 +217,144 @@ export class ProxyHandler {
         res.end('502 Bad Gateway - Proxy error occurred');
       }
     });
+  }
+
+  /**
+   * Setup response interceptor to rewrite URLs in response headers
+   * This adds basePath prefix to URLs in Location, Link, and other headers
+   * @param res HTTP response
+   * @param basePath Base path to prepend to URLs
+   */
+  private setupResponseInterceptor(res: http.ServerResponse, basePath: string): void {
+    if (basePath === '/') {
+      return; // No rewriting needed for root path
+    }
+
+    const originalWriteHead = res.writeHead.bind(res);
+    const originalSetHeader = res.setHeader.bind(res);
+    const self = this;
+
+    // Intercept writeHead to rewrite Location header
+    res.writeHead = function (statusCode: number, statusMessage?: any, headers?: any): http.ServerResponse {
+      const mergedHeaders = self.mergeHeaders(statusMessage, headers);
+      self.rewriteHeaders(mergedHeaders, basePath);
+      return originalWriteHead(statusCode, mergedHeaders);
+    } as typeof res.writeHead;
+
+    // Intercept setHeader to rewrite headers as they are set
+    res.setHeader = function (name: string, value: string | number | string[]): http.ServerResponse {
+      const headerName = name.toLowerCase();
+      if (self.shouldRewriteHeader(headerName)) {
+        value = self.rewriteHeaderValue(value, basePath);
+      }
+      return originalSetHeader(name, value);
+    } as typeof res.setHeader;
+  }
+
+  /**
+   * Merge headers from writeHead parameters
+   * @param statusMessage Status message or headers object
+   * @param headers Headers object
+   * @returns Merged headers object
+   */
+  private mergeHeaders(
+    statusMessage?: string | http.OutgoingHttpHeaders,
+    headers?: http.OutgoingHttpHeaders
+  ): http.OutgoingHttpHeaders {
+    if (typeof statusMessage === 'object' && statusMessage !== null) {
+      return { ...statusMessage, ...headers };
+    }
+    return headers || {};
+  }
+
+  /**
+   * Rewrite headers to add basePath prefix to URLs
+   * @param headers Headers object
+   * @param basePath Base path to prepend
+   */
+  private rewriteHeaders(headers: http.OutgoingHttpHeaders, basePath: string): void {
+    for (const [key, value] of Object.entries(headers)) {
+      const headerName = key.toLowerCase();
+      if (this.shouldRewriteHeader(headerName) && value != null) {
+        if (typeof value === 'string' || typeof value === 'number' || Array.isArray(value)) {
+          headers[key] = this.rewriteHeaderValue(value, basePath);
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if a header should be rewritten
+   * @param headerName Header name (lowercase)
+   * @returns True if header should be rewritten
+   */
+  private shouldRewriteHeader(headerName: string): boolean {
+    return ['location', 'link', 'content-location'].includes(headerName);
+  }
+
+  /**
+   * Rewrite header value to add basePath prefix to URLs
+   * @param value Header value (string, number, or array)
+   * @param basePath Base path to prepend
+   * @returns Rewritten header value
+   */
+  private rewriteHeaderValue(value: string | number | string[], basePath: string): string | number | string[] {
+    if (typeof value === 'number') {
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((v) => this.rewriteUrl(v, basePath));
+    }
+
+    return this.rewriteUrl(value, basePath);
+  }
+
+  /**
+   * Rewrite a URL to add basePath prefix
+   * @param url URL to rewrite
+   * @param basePath Base path to prepend
+   * @returns Rewritten URL
+   */
+  private rewriteUrl(url: string, basePath: string): string {
+    // Skip if URL is absolute (starts with http:// or https://)
+    if (/^https?:\/\//i.test(url)) {
+      // Check if it's a relative path within the same domain
+      try {
+        const urlObj = new URL(url);
+        // If it's a path-only URL (no domain), rewrite it
+        if (urlObj.pathname && !urlObj.hostname) {
+          return basePath + urlObj.pathname + (urlObj.search || '') + (urlObj.hash || '');
+        }
+      } catch {
+        // Invalid URL, try to rewrite as relative path
+      }
+      return url;
+    }
+
+    // Skip if URL starts with // (protocol-relative)
+    if (url.startsWith('//')) {
+      return url;
+    }
+
+    // Skip if URL starts with # (fragment only)
+    if (url.startsWith('#')) {
+      return url;
+    }
+
+    // Skip if URL starts with ? (query only)
+    if (url.startsWith('?')) {
+      return url;
+    }
+
+    // For relative URLs, add basePath prefix
+    // Remove leading slash if present to avoid double slashes
+    const cleanUrl = url.startsWith('/') ? url : '/' + url;
+    
+    // Ensure basePath ends with / for proper joining
+    const normalizedBasePath = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
+    
+    return normalizedBasePath + cleanUrl;
   }
 
   /**
