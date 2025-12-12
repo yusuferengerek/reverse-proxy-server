@@ -106,6 +106,10 @@ export class ConfigLoader {
       throw new Error(`Invalid route at ${context}[${index}]: must be an object`);
     }
 
+    if (route.host && typeof route.host !== 'string') {
+      throw new Error(`Invalid host at ${context}[${index}]: must be a string`);
+    }
+
     // Route must have either redirect, or path with port/target
     if (route.redirect) {
       if (typeof route.redirect !== 'string') {

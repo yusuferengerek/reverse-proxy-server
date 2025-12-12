@@ -12,7 +12,7 @@ A simple, componentized HTTP reverse proxy server built with TypeScript and Node
 - 🎯 Domain and subdomain-based routing
 - 🔀 Path-based routing within domains
 - ↪️ Automatic redirects support
-- 🔌 Port-based or URL-based target configuration
+- 🔌 Host+port or URL-based target configuration
 
 ## Installation
 
@@ -47,6 +47,7 @@ Create a `services.yml` file in the root directory. The configuration supports d
 example.com:
   routes:
     - path: /
+      host: localhost
       port: 3000
 ```
 
@@ -59,6 +60,7 @@ mysite.com:
   subdomains:
     www:
       - path: /
+        host: localhost
         port: 3000
 ```
 
@@ -71,15 +73,19 @@ myapp.com:
   subdomains:
     www:
       - path: /
+        host: app-host
         port: 3000
     api:
       - path: /
+        host: api-host
         port: 3001
     admin:
       - path: /
+        host: admin-host
         port: 3002
     cdn:
       - path: /
+        host: cdn-host
         port: 3003
 ```
 
@@ -89,10 +95,13 @@ myapp.com:
 app.io:
   routes:
     - path: /
+      host: localhost
       port: 4000
     - path: /api
+      host: api-host
       port: 4001
     - path: /admin
+      host: admin-host
       port: 4002
 ```
 
@@ -103,13 +112,17 @@ service.com:
   subdomains:
     v1:
       - path: /api
+        host: v1-api
         port: 5001
       - path: /auth
+        host: v1-auth
         port: 5002
     v2:
       - path: /api
+        host: v2-api
         port: 6001
       - path: /auth
+        host: v2-auth
         port: 6002
 ```
 
@@ -118,7 +131,8 @@ service.com:
 #### Route Configuration
 
 - **path**: The URL path prefix to match (e.g., `/`, `/api`, `/admin`)
-- **port**: Target port number (creates `http://localhost:{port}` target)
+- **host**: Optional target host when using `port` (default: `localhost`)
+- **port**: Target port number (creates `http://{host}:{port}` target)
 - **target**: Alternative to port - full target server URL (e.g., `http://localhost:3000`)
 - **redirect**: Subdomain to redirect to (e.g., `www` redirects to `www.{domain}`)
 - **options**: Optional proxy options (see [http-proxy documentation](https://github.com/http-party/node-http-proxy))
@@ -169,6 +183,7 @@ With this configuration:
 example.com:
   routes:
     - path: /
+      host: localhost
       port: 3000
 ```
 
@@ -182,10 +197,11 @@ myapp.com:
   subdomains:
     api:
       - path: /
+        host: api-host
         port: 3001
 ```
 
-A request to `http://api.myapp.com/` will be proxied to `http://localhost:3001/`.
+A request to `http://api.myapp.com/` will be proxied to `http://api-host:3001/`.
 
 ### Path-based Routing
 
@@ -194,10 +210,11 @@ With this configuration:
 app.io:
   routes:
     - path: /api
+      host: api-host
       port: 4001
 ```
 
-A request to `http://app.io/api/users` will be proxied to `http://localhost:4001/api/users`.
+A request to `http://app.io/api/users` will be proxied to `http://api-host:4001/api/users`.
 
 ## Requirements
 

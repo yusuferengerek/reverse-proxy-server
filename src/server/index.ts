@@ -141,8 +141,9 @@ export class HttpServer {
     let target: string;
     if (route.target) {
       target = route.target;
-    } else if (route.port) {
-      target = `http://localhost:${route.port}`;
+    } else if (route.port !== undefined) {
+      const host = route.host || 'localhost';
+      target = `http://${host}:${route.port}`;
     } else {
       throw new Error(`Route must have either target or port: ${JSON.stringify(route)}`);
     }

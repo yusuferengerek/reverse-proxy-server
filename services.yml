@@ -1,9 +1,11 @@
 # Domain Configuration Example
+# 'host' defaults to localhost when omitted.
 
-# Example 1: Basic domain routing
+# Example 1: Basic domain routing with explicit host
 example.com:
   routes:
     - path: /
+      host: localhost
       port: 3000
 
 # Example 2: Subdomain redirect
@@ -13,34 +15,42 @@ mysite.com:
   subdomains:
     www:
       - path: /
+        host: localhost
         port: 3000
 
-# Example 3: Multiple subdomains
+# Example 3: Multiple subdomains with different hosts
 myapp.com:
   routes:
     - redirect: www
   subdomains:
     www:
       - path: /
+        host: app-host
         port: 3000
     api:
       - path: /
+        host: api-host
         port: 3001
     admin:
       - path: /
+        host: admin-host
         port: 3002
     cdn:
       - path: /
+        host: cdn-host
         port: 3003
 
 # Example 4: Path-based routing
 app.io:
   routes:
     - path: /
+      host: localhost
       port: 4000
     - path: /api
+      host: api-host
       port: 4001
     - path: /admin
+      host: admin-host
       port: 4002
 
 # Example 5: Subdomain + Path routing
@@ -48,11 +58,15 @@ service.com:
   subdomains:
     v1:
       - path: /api
+        host: v1-api
         port: 5001
       - path: /auth
+        host: v1-auth
         port: 5002
     v2:
       - path: /api
+        host: v2-api
         port: 6001
       - path: /auth
+        host: v2-auth
         port: 6002

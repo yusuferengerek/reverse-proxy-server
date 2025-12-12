@@ -6,6 +6,7 @@ import { ServerOptions } from 'http-proxy';
 export interface RouteConfig {
   path: string;
   port?: number;
+  host?: string;
   target?: string;
   redirect?: string;
   options?: ServerOptions;
